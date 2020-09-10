@@ -1,0 +1,1 @@
+rustflags = ["-C", "target-features=+sse3,+avx,target-cpu=native"]
