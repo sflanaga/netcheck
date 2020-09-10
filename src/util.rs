@@ -85,3 +85,35 @@ pub fn greek(v: f64) -> String {
 
     return format!("{:<5}{}", s, GREEK_SUFFIXES[multi]);
 }
+
+
+pub fn to_size_u64(s: &str) -> Result<u64, anyhow::Error> {
+    let mut num = String::new();
+    let mut bytes = 0u64;
+    for c in s.chars() {
+        if c >= '0' && c <='9' {
+            num.push(c);
+        } else {
+            let s = num.parse::<u64>().with_context(|| format!("cannot parse number {} inside duration {}", &num, &s))?;
+            num.clear();
+            match c {
+                'k' | 'K'  => bytes += s * 1024,
+                'm' | 'M'  => bytes += s * (1024*1024),
+                'g' | 'G' => bytes += s * (1024*1024*1024),
+                't' | 'T' => bytes += s * (1024*1024*1024*1024),
+                'p' | 'P' => bytes += s * (1024*1024*1024*1024*1024),
+                _ => Err(anyhow!("Cannot interpret {} as a bytes unit inside size {}", c, &s))?,
+            }
+        }
+    }
+    if num.len() > 0 {
+        bytes += num.parse::<u64>().with_context(|| format!("cannot parse number {} inside size {}", &num, &s))?;
+    }
+    Ok(bytes)
+}
+
+pub fn to_size_usize(s: &str) -> Result<usize, anyhow::Error> {
+    let sz = to_size_u64(s)?;
+    return Ok(sz as usize);
+}
+

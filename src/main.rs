@@ -18,7 +18,7 @@ use std::net::{TcpListener, TcpStream, SocketAddr};
 use std::io::{Read, Write};
 use std::sync::{Arc,Mutex,Condvar};
 use std::sync::atomic::{AtomicU64, AtomicBool, Ordering};
-use util::{to_log_level, to_duration};
+use util::{to_log_level, to_duration, to_size_usize};
 use std::str::FromStr;
 use std::thread::spawn;
 use core::mem;
@@ -56,6 +56,10 @@ pub struct Cli {
     /// client ip:port of server end to connect too
     pub timeout: Duration,
 
+    #[structopt(short = "B", long, default_value("256k"), parse(try_from_str = to_size_usize))]
+    /// log level
+    pub buff_size: usize,
+
     #[structopt(short, long)]
     /// client validate buf
     pub exambuf: bool,
@@ -77,6 +81,9 @@ fn main() {
 
 fn run() -> Result<()> {
     let cli: Cli = Cli::from_args();
+    if cli.buff_size % 8 != 0 {
+        return Err(anyhow!("buff size must be a multiple 8"));
+    }
     util::init_log(cli.log_level);
     if let Some(ip_str) = cli.server {
         println!("server listening to {}", &ip_str);
@@ -90,7 +97,7 @@ fn run() -> Result<()> {
             let client_addr = stream.peer_addr()?;
             info!("Connection from: {:?}", &client_addr);
             spawn_ticker();
-            match server(stream) {
+            match server(stream, cli.buff_size) {
                 Err(e) => error!("Going back to listening, error {:?}", e),
                 Ok(()) => info!("client {} done - going back to listening", &client_addr),
             }
@@ -103,7 +110,7 @@ fn run() -> Result<()> {
         stream.set_read_timeout(Some(cli.timeout));
         stream.set_write_timeout(Some(cli.timeout));
         spawn_ticker();
-        client(stream, cli.exambuf)?;
+        client(stream, cli.buff_size, cli.exambuf)?;
     } else {
         return Err(anyhow!("Error - either server or client must be specified"))?;
     }
@@ -112,8 +119,8 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-fn server(mut stream: TcpStream) -> Result<()> {
-    let mut buf = vec![0; 64 * 1024];
+fn server(mut stream: TcpStream, buff_size: usize) -> Result<()> {
+    let mut buf = vec![0; buff_size];
     // fill buf with deadbeef
     let r = [0xaa, 0xaa, 0xaa, 0xa];
     for (c, b) in buf.iter_mut().enumerate() {
@@ -129,8 +136,8 @@ fn server(mut stream: TcpStream) -> Result<()> {
     Ok(())
 }
 
-fn client(mut stream: TcpStream, validate: bool) -> Result<()> {
-    let mut validate_buf = vec![0u8; 64 * 1024];
+fn client(mut stream: TcpStream, buff_size: usize, validate: bool) -> Result<()> {
+    let mut validate_buf = vec![0u8; buff_size];
     // fill buf with deadbeef
     //let r = [0xaa, 0xaa, 0xaa, 0xaa];
     for (c, b) in validate_buf.iter_mut().enumerate() {
