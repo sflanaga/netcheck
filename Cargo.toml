@@ -1,0 +1,25 @@
+[package]
+name = "netcheck"
+version = "0.1.0"
+authors = ["Steve <stevemflanagan@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[build-dependencies]
+vergen = "3.1.0"
+
+[profile.release]
+debug=0
+# these OPT add about 15% in reducing user cpu time
+#lto = true
+codegen-units=1
+opt-level = 3
+
+
+[dependencies]
+anyhow = "1.0.32"
+structopt = "0.3.17"
+log = "0.4.11"
+lazy_static = "1.4.0"
+chrono = "0.4.15"
+env_logger = "0.7.1"
