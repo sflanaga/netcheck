@@ -4,7 +4,6 @@
 #![allow(unused_mut)]
 #![allow(unreachable_code)]
 
-
 mod util;
 
 use std::path::PathBuf;
@@ -77,7 +76,7 @@ pub struct Cli {
 
 fn main() {
     if let Err(err) = run() {
-        eprintln!("Error: {:?}", &err);
+        error!("Error: {:?}", &err);
         std::process::exit(1);
     }
 }
@@ -90,7 +89,7 @@ fn run() -> Result<()> {
     }
     util::init_log(cli.log_level);
     if let Some(ip_str) = cli.server {
-        println!("server listening to {}", &ip_str);
+        info!("server listening to {}", &ip_str);
         let addr: SocketAddr = SocketAddr::from_str(&ip_str)?;
         let listener = TcpListener::bind(addr).with_context(|| format!("not a valid IP address: {}", &ip_str))?;
         // accept connections and process them serially
@@ -108,7 +107,7 @@ fn run() -> Result<()> {
             stop_ticker();
         }
     } else if let Some(ip_str) = cli.client {
-        println!("client connecting to {}", &ip_str);
+        info!("client connecting to {}", &ip_str);
         let addr: SocketAddr = SocketAddr::from_str(&ip_str).with_context(|| format!("not a valid IP address: {}", &ip_str))?;
         let mut stream = TcpStream::connect_timeout(&addr, cli.timeout)?;
         stream.set_read_timeout(Some(cli.timeout))?;
@@ -125,24 +124,20 @@ fn run() -> Result<()> {
 
 
 fn server(mut stream: TcpStream, buff_size: usize, validate: bool) -> Result<()> {
-    let mut buf = vec![0; buff_size];
 
-    let cmd_size = stream.read(&mut buf)?;
-
-    if cmd_size != 1 {
-        return Err(anyhow!("expected command from clinet - U or D, but got message of size: {}", cmd_size));
-    }
+    let mut buf = vec![0u8; 1];
+    stream.read_exact(&mut buf)?;
 
     match buf[0] {
         b'U' => {
-            println!("receiving - client sent upload 'U' command");
+            info!("receiving - client sent upload 'U' command");
             match recv_bytes(stream, buff_size, validate) {
                 Ok(()) => {},
-                Err(e) => println!("cliented stopped?  msg: {}", e),
+                Err(e) => info!("client stopped, reason: {}", e),
             }
         },
         b'D' => {
-            println!("sending - client sent download 'D' command");
+            info!("sending - client sent download 'D' command");
             send_bytes(stream, buff_size)?;
         },
         b => {
@@ -155,11 +150,11 @@ fn server(mut stream: TcpStream, buff_size: usize, validate: bool) -> Result<()>
 
 fn client(mut stream: TcpStream, buff_size: usize, validate: bool, upload: bool) -> Result<()> {
     if upload {
-        println!("requesting uploading");
+        info!("requesting uploading");
         stream.write(&[b'U'])?;
         send_bytes(stream, buff_size)?;
     } else {
-        println!("requesting downloading");
+        info!("requesting downloading");
         stream.write(&[b'D'])?;
         recv_bytes(stream, buff_size, validate)?;
     }
