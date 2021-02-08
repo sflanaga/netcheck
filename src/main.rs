@@ -22,6 +22,7 @@ use util::{to_log_level, to_duration, to_size_usize};
 use std::str::FromStr;
 use std::thread::spawn;
 use core::mem;
+use humantime::parse_duration;
 
 type Result<T> = anyhow::Result<T, anyhow::Error>;
 
@@ -52,7 +53,7 @@ pub struct Cli {
     /// client ip:port of server end to connect too
     pub client: Option<String>,
 
-    #[structopt(short, long, default_value("5s"), parse(try_from_str = to_duration))]
+    #[structopt(short, long, default_value("5s"), parse(try_from_str = parse_duration))]
     /// client ip:port of server end to connect too
     pub timeout: Duration,
 
@@ -64,6 +65,9 @@ pub struct Cli {
     /// client validate buf
     pub exambuf: bool,
 
+    #[structopt(short, long, conflicts_with_all = &["server"])]
+    /// client requests uploading - default is to download from server
+    pub upload: bool,
 
     #[structopt(short = "L", long, parse(try_from_str = to_log_level), default_value("info"))]
     /// log level
@@ -92,12 +96,12 @@ fn run() -> Result<()> {
         // accept connections and process them serially
         for stream in listener.incoming() {
             let stream = stream?;
-            stream.set_read_timeout(Some(cli.timeout));
-            stream.set_write_timeout(Some(cli.timeout));
+            stream.set_read_timeout(Some(cli.timeout))?;
+            stream.set_write_timeout(Some(cli.timeout))?;
             let client_addr = stream.peer_addr()?;
             info!("Connection from: {:?}", &client_addr);
             spawn_ticker();
-            match server(stream, cli.buff_size) {
+            match server(stream, cli.buff_size, cli.exambuf) {
                 Err(e) => error!("Going back to listening, error {:?}", e),
                 Ok(()) => info!("client {} done - going back to listening", &client_addr),
             }
@@ -107,10 +111,10 @@ fn run() -> Result<()> {
         println!("client connecting to {}", &ip_str);
         let addr: SocketAddr = SocketAddr::from_str(&ip_str).with_context(|| format!("not a valid IP address: {}", &ip_str))?;
         let mut stream = TcpStream::connect_timeout(&addr, cli.timeout)?;
-        stream.set_read_timeout(Some(cli.timeout));
-        stream.set_write_timeout(Some(cli.timeout));
+        stream.set_read_timeout(Some(cli.timeout))?;
+        stream.set_write_timeout(Some(cli.timeout))?;
         spawn_ticker();
-        client(stream, cli.buff_size, cli.exambuf)?;
+        client(stream, cli.buff_size, cli.exambuf, cli.upload)?;
     } else {
         return Err(anyhow!("Error - either server or client must be specified"))?;
     }
@@ -119,24 +123,68 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-fn server(mut stream: TcpStream, buff_size: usize) -> Result<()> {
+
+fn server(mut stream: TcpStream, buff_size: usize, validate: bool) -> Result<()> {
     let mut buf = vec![0; buff_size];
-    // fill buf with deadbeef
-    let r = [0xaa, 0xaa, 0xaa, 0xa];
-    for (c, b) in buf.iter_mut().enumerate() {
-        let i = c & 0x03;
-        *b = 0xaa; // r[i];
+
+    let cmd_size = stream.read(&mut buf)?;
+
+    if cmd_size != 1 {
+        return Err(anyhow!("expected command from clinet - U or D, but got message of size: {}", cmd_size));
     }
 
-    loop {
-        stream.write_all(&mut buf)?;
-        STAT.fetch_add(buf.len() as u64, Ordering::Relaxed);
+    match buf[0] {
+        b'U' => {
+            println!("receiving - client sent upload 'U' command");
+            match recv_bytes(stream, buff_size, validate) {
+                Ok(()) => {},
+                Err(e) => println!("cliented stopped?  msg: {}", e),
+            }
+        },
+        b'D' => {
+            println!("sending - client sent download 'D' command");
+            send_bytes(stream, buff_size)?;
+        },
+        b => {
+            return Err(anyhow!("Cmd \"{}\" not understood", b));
+        }
+
+    }
+    return Ok(());
+}
+
+fn client(mut stream: TcpStream, buff_size: usize, validate: bool, upload: bool) -> Result<()> {
+    if upload {
+        println!("requesting uploading");
+        stream.write(&[b'U'])?;
+        send_bytes(stream, buff_size)?;
+    } else {
+        println!("requesting downloading");
+        stream.write(&[b'D'])?;
+        recv_bytes(stream, buff_size, validate)?;
     }
 
     Ok(())
 }
 
-fn client(mut stream: TcpStream, buff_size: usize, validate: bool) -> Result<()> {
+
+
+fn send_bytes(mut stream: TcpStream, buff_size: usize) -> Result<()> {
+// fill buf with deadbeef
+    let mut buf = vec![0; 64 * 1024];
+    let r = [0xaa, 0xaa, 0xaa, 0xa];
+    for (c, b) in buf.iter_mut().enumerate() {
+        let i = c & 0x03;
+        *b = 0xaa; // r[i];
+    }
+    loop {
+        stream.write_all(&mut buf)?;
+        STAT.fetch_add(buf.len() as u64, Ordering::Relaxed);
+    }
+    return Ok(());
+}
+
+fn recv_bytes(mut stream: TcpStream, buff_size: usize, validate: bool) -> Result<()> {
     let mut validate_buf = vec![0u8; buff_size];
     // fill buf with deadbeef
     //let r = [0xaa, 0xaa, 0xaa, 0xaa];
