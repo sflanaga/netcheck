@@ -5,6 +5,7 @@
 #![allow(unreachable_code)]
 
 mod util;
+mod cli;
 
 use std::path::PathBuf;
 use structopt::StructOpt;
@@ -12,8 +13,7 @@ use std::time::{Instant, Duration};
 use anyhow::{anyhow, Context};
 use log::{debug, error, info, trace, warn};
 use log::LevelFilter;
-use lazy_static::lazy_static;
-use std::net::{TcpListener, TcpStream, SocketAddr};
+use std::net::{TcpListener, TcpStream, SocketAddr, IpAddr, Ipv4Addr};
 use std::io::{Read, Write};
 use std::sync::{Arc,Mutex,Condvar};
 use std::sync::atomic::{AtomicU64, AtomicBool, Ordering};
@@ -22,12 +22,10 @@ use std::str::FromStr;
 use std::thread::spawn;
 use core::mem;
 use humantime::parse_duration;
-
-type Result<T> = anyhow::Result<T, anyhow::Error>;
+use lazy_static::lazy_static;
+use crate::cli::Cli;
 
 lazy_static! {
-    pub static ref BUILD_INFO: String  = format!("ver: {}  rev: {}  date: {}", env!("CARGO_PKG_VERSION"), env!("VERGEN_SHA_SHORT"), env!("VERGEN_BUILD_DATE"));
-
     pub static ref STAT: AtomicU64 = AtomicU64::new(0);
 
     pub static ref STOP_TICKER: AtomicBool = AtomicBool::new(false);
@@ -35,44 +33,7 @@ lazy_static! {
     pub static ref COND_STOP: Arc<(Mutex<bool>, Condvar)> = Arc::new((Mutex::new(false), Condvar::new()));
 }
 
-#[derive(StructOpt, Debug, Clone)]
-#[structopt(
-version = BUILD_INFO.as_str(), rename_all = "kebab-case",
-global_settings(& [
-structopt::clap::AppSettings::ColoredHelp,
-structopt::clap::AppSettings::UnifiedHelpMessage
-]),
-)]
-pub struct Cli {
-    #[structopt(short, long, conflicts_with("client"))]
-    /// server ip:port binding address
-    pub server: Option<String>,
-
-    #[structopt(short, long, conflicts_with("server"))]
-    /// client ip:port of server end to connect too
-    pub client: Option<String>,
-
-    #[structopt(short, long, default_value("5s"), parse(try_from_str = parse_duration))]
-    /// client ip:port of server end to connect too
-    pub timeout: Duration,
-
-    #[structopt(short = "B", long, default_value("256k"), parse(try_from_str = to_size_usize))]
-    /// log level
-    pub buff_size: usize,
-
-    #[structopt(short, long)]
-    /// client validate buf
-    pub exambuf: bool,
-
-    #[structopt(short, long, conflicts_with_all = &["server"])]
-    /// client requests uploading - default is to download from server
-    pub upload: bool,
-
-    #[structopt(short = "L", long, parse(try_from_str = to_log_level), default_value("info"))]
-    /// log level
-    pub log_level: LevelFilter,
-
-}
+type Result<T> = anyhow::Result<T, anyhow::Error>;
 
 fn main() {
     if let Err(err) = run() {
@@ -87,11 +48,20 @@ fn run() -> Result<()> {
     if cli.buff_size % 8 != 0 {
         return Err(anyhow!("buff size must be a multiple 8"));
     }
+
+
     util::init_log(cli.log_level);
-    if let Some(ip_str) = cli.server {
-        info!("server listening to {}", &ip_str);
-        let addr: SocketAddr = SocketAddr::from_str(&ip_str)?;
-        let listener = TcpListener::bind(addr).with_context(|| format!("not a valid IP address: {}", &ip_str))?;
+    if let Some(socket_addr) = cli.server {
+        let mut socket_addr = if  socket_addr.is_some() {
+            let soc_str = socket_addr.unwrap();
+            util::str_to_socketaddr(&soc_str)?
+        } else {
+            SocketAddr::new(IpAddr::from(Ipv4Addr::new(0, 0, 0, 0)), cli.port)
+        };
+        socket_addr.set_port(cli.port);
+
+        info!("server listening to {}", &socket_addr);
+        let listener = TcpListener::bind(socket_addr).with_context(|| format!("not a valid IP address: {}", &socket_addr))?;
         // accept connections and process them serially
         for stream in listener.incoming() {
             let stream = stream?;
@@ -106,10 +76,10 @@ fn run() -> Result<()> {
             }
             stop_ticker();
         }
-    } else if let Some(ip_str) = cli.client {
-        info!("client connecting to {}", &ip_str);
-        let addr: SocketAddr = SocketAddr::from_str(&ip_str).with_context(|| format!("not a valid IP address: {}", &ip_str))?;
-        let mut stream = TcpStream::connect_timeout(&addr, cli.timeout)?;
+    } else if let Some(mut socker_addr) = cli.client {
+        socker_addr.set_port(cli.port);
+        info!("client connecting to {}", &socker_addr);
+        let mut stream = TcpStream::connect_timeout(&socker_addr, cli.timeout)?;
         stream.set_read_timeout(Some(cli.timeout))?;
         stream.set_write_timeout(Some(cli.timeout))?;
         spawn_ticker();

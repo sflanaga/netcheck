@@ -5,6 +5,8 @@ use env_logger; //::{Builder, Env, fmt::{Color, Formatter}};
 use log::LevelFilter;
 use std::time::Duration;
 use anyhow::{anyhow,Context};
+use std::net::{ToSocketAddrs,SocketAddr};
+use std::str::FromStr;
 
 #[allow(unused)]
 pub fn print_type_of<T>(_: &T) {
@@ -117,3 +119,25 @@ pub fn to_size_usize(s: &str) -> Result<usize, anyhow::Error> {
     return Ok(sz as usize);
 }
 
+pub fn str_to_socketaddr(s: &str) -> Result<SocketAddr, anyhow::Error> {
+    //if let Some(s) = s {
+    use std::net::SocketAddr;
+    use std::net::IpAddr;
+    match s.parse() {
+        Ok(soc) => Ok(soc),
+        Err(e) => {
+            let mut buf = String::from(s);
+            buf.push_str(":5150");
+            match buf.as_str().to_socket_addrs() {
+                Ok(mut soc_itr) => {
+                    if let Some(soc) = soc_itr.next() {
+                        Ok(soc)
+                    } else {
+                        Err(anyhow!("empty result from DNS lookup for: {}", &s))
+                    }
+                },
+                Err(e) => Err(anyhow!("Unable to get socket address from {} because \"{}\"", &s, e)),
+            }
+        }
+    }
+}
